@@ -4,3 +4,4 @@ torch
 openai-whisper
 fpdf
 Pillow
+reportlab
