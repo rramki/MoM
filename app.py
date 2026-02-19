@@ -1,24 +1,17 @@
 import streamlit as st
-import whisper
-from transformers import pipeline
+from openai import OpenAI
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
+from datetime import datetime
 import tempfile
 import os
-from datetime import datetime
 
-st.set_page_config(page_title="MoM Generator", layout="centered")
-st.title("📄 AI Minutes of Meeting Generator")
+st.set_page_config(page_title="Professional MoM Generator", layout="centered")
+st.title("📄 Professional AI Minutes of Meeting Generator")
 
-@st.cache_resource
-def load_models():
-    whisper_model = whisper.load_model("tiny")  # smaller model
-    summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-    return whisper_model, summarizer
-
-whisper_model, summarizer = load_models()
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 uploaded_file = st.file_uploader("Upload Meeting Audio", type=["mp3", "wav", "m4a"])
 
@@ -26,35 +19,51 @@ if uploaded_file:
 
     st.audio(uploaded_file)
 
-    with st.spinner("Transcribing..."):
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(uploaded_file.read())
-            tmp_path = tmp.name
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(uploaded_file.read())
+        tmp_path = tmp.name
 
-        result = whisper_model.transcribe(tmp_path)
-        transcript = result["text"]
+    # Transcription via OpenAI API
+    with st.spinner("Transcribing audio..."):
+        with open(tmp_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file
+            ).text
 
     st.subheader("Transcript")
     st.write(transcript)
 
-    # 🔹 Break large transcript into chunks (prevents crash)
-    def chunk_text(text, max_chunk=1000):
-        return [text[i:i+max_chunk] for i in range(0, len(text), max_chunk)]
+    # Generate structured MoM
+    with st.spinner("Generating professional MoM..."):
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a professional corporate meeting assistant."},
+                {"role": "user", "content": f"""
+                Convert this transcript into structured professional Minutes of Meeting including:
 
-    with st.spinner("Generating Summary..."):
-        chunks = chunk_text(transcript)
-        summary_parts = []
+                - Meeting Title
+                - Date
+                - Participants
+                - Agenda
+                - Key Discussion Points
+                - Decisions Taken
+                - Action Items
+                - Next Meeting Details
 
-        for chunk in chunks[:3]:  # limit chunks to avoid memory issue
-            summary = summarizer(chunk, max_length=150, min_length=40, do_sample=False)[0]["summary_text"]
-            summary_parts.append(summary)
+                Transcript:
+                {transcript}
+                """}
+            ]
+        )
 
-        final_summary = " ".join(summary_parts)
+        mom_text = response.choices[0].message.content
 
-    st.subheader("Structured Minutes")
-    st.write(final_summary)
+    st.subheader("Structured MoM")
+    st.write(mom_text)
 
-    # PDF generation
+    # PDF Generation
     def generate_pdf(text):
         file_path = "Minutes_of_Meeting.pdf"
         doc = SimpleDocTemplate(file_path, pagesize=A4)
@@ -63,18 +72,18 @@ if uploaded_file:
         elements = []
         elements.append(Paragraph("MINUTES OF MEETING", styles["Heading1"]))
         elements.append(Spacer(1, 0.3 * inch))
-        elements.append(Paragraph(f"Date: {datetime.now().strftime('%d %B %Y')}", styles["Normal"]))
+        elements.append(Paragraph(f"Generated on: {datetime.now().strftime('%d %B %Y')}", styles["Normal"]))
         elements.append(Spacer(1, 0.3 * inch))
-        elements.append(Paragraph(text, styles["Normal"]))
+        elements.append(Paragraph(text.replace("\n", "<br/>"), styles["Normal"]))
 
         doc.build(elements)
         return file_path
 
-    pdf_file = generate_pdf(final_summary)
+    pdf_file = generate_pdf(mom_text)
 
     with open(pdf_file, "rb") as f:
         st.download_button(
-            "Download MoM PDF",
+            "📥 Download Professional MoM PDF",
             f,
             file_name="Minutes_of_Meeting.pdf",
             mime="application/pdf"
